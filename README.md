@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Financial Tracker
 Requested tool from brother (business major)
 
