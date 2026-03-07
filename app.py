@@ -22,6 +22,7 @@ DEFAULT_CATEGORY_RULES = {
     "Health": ["pharmacy", "cvs", "walgreens", "doctor", "hospital", "gym", "health"],
     "Travel": ["airline", "hotel", "airbnb", "booking", "expedia", "delta", "united", "american airlines"],
     "Subscriptions": ["subscription", "monthly", "annual", "membership"],
+    "Transfers": ["venmo", "zelle", "apple cash", "cash app"],
 }
 
 
