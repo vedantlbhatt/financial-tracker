@@ -23,6 +23,7 @@ DEFAULT_CATEGORY_RULES = {
     "Travel": ["airline", "hotel", "airbnb", "booking", "expedia", "delta", "united", "american airlines"],
     "Subscriptions": ["subscription", "monthly", "annual", "membership"],
     "Transfers": ["venmo", "zelle", "apple cash", "cash app"],
+    "Credit Card Payments": ["mobile banking"]
 }
 
 
@@ -184,6 +185,38 @@ if uploaded_files:
                             except Exception as e:
                                 st.warning(f"Could not parse rules: {e}")
 
+                    # Per-transaction manual category tweaks
+                    with st.expander("Review & adjust categories per transaction"):
+                        category_options = ["Uncategorized"] + [
+                            c for c in sorted(DEFAULT_CATEGORY_RULES.keys()) if c != "Uncategorized"
+                        ]
+                        display_bofa = df_spend[["date", "description", "amount", "category"]].copy()
+                        display_bofa["category"] = display_bofa["category"].fillna("Uncategorized")
+                        editable_bofa = st.data_editor(
+                            display_bofa,
+                            num_rows="fixed",
+                            use_container_width=True,
+                            key="bofa_editor",
+                            column_config={
+                                "category": st.column_config.SelectboxColumn(
+                                    "Category (click to change)",
+                                    options=category_options,
+                                    help="Pick an existing category or type your own.",
+                                    width=220,
+                                )
+                            },
+                        )
+                        df_spend["category"] = editable_bofa["category"]
+
+                    # Focused view of uncategorized charges, with yellow category cell
+                    with st.expander("Uncategorized charges (yellow = needs review)"):
+                        uncat = df_spend[df_spend["category"] == "Uncategorized"]
+                        if uncat.empty:
+                            st.write("✅ No uncategorized charges.")
+                        else:
+                            uncat_view = uncat[["date", "description", "amount", "category"]]
+                            st.dataframe(uncat, use_container_width=True, hide_index=True)
+
                     # Summary
                     st.subheader("Spending by category")
                     summary = df_spend.groupby("category")["amount"].sum().sort_values(ascending=False).reset_index()
@@ -200,10 +233,6 @@ if uploaded_files:
                     monthly["date"] = monthly["date"].astype(str)
                     fig_trend = px.line(monthly, x="date", y="amount", color="category", title="Monthly spending by category")
                     st.plotly_chart(fig_trend, use_container_width=True)
-
-                    # Raw data
-                    with st.expander("View raw transactions"):
-                        st.dataframe(df, use_container_width=True, hide_index=True)
 
     else:
         # Generic: single file or merge by columns
@@ -244,6 +273,42 @@ if uploaded_files:
                     except Exception as e:
                         st.warning(f"Could not parse rules: {e}")
 
+            # Per-transaction manual category tweaks
+            with st.expander("Review & adjust categories per transaction"):
+                category_options = ["Uncategorized"] + [
+                    c for c in sorted(DEFAULT_CATEGORY_RULES.keys()) if c != "Uncategorized"
+                ]
+                display_generic = df[["date", "description", "amount", "category"]].copy()
+                display_generic["category"] = display_generic["category"].fillna("Uncategorized")
+                editable_generic = st.data_editor(
+                    display_generic,
+                    num_rows="fixed",
+                    use_container_width=True,
+                    key="generic_editor",
+                    column_config={
+                        "category": st.column_config.SelectboxColumn(
+                            "Category (click to change)",
+                            options=category_options,
+                            help="Pick an existing category or type your own.",
+                            width=220,
+                        )
+                    },
+                )
+                df["category"] = editable_generic["category"]
+
+            # Focused view of uncategorized charges, with yellow category cell
+            with st.expander("Uncategorized charges (yellow = needs review)"):
+                uncat = df[df["category"] == "Uncategorized"]
+                if uncat.empty:
+                    st.write("✅ No uncategorized charges.")
+                else:
+                    uncat_view = uncat[["date", "description", "amount", "category"]]
+                    styled_uncat = uncat_view.style.applymap(
+                        lambda v: "background-color: #fff6a1" if v == "Uncategorized" else "",
+                        subset=["category"],
+                    )
+                    st.dataframe(styled_uncat, use_container_width=True, hide_index=True)
+
             st.subheader("Summary by category")
             summary = df.groupby("category")["amount"].sum().sort_values(ascending=False).reset_index()
             col1, col2 = st.columns(2)
@@ -258,9 +323,6 @@ if uploaded_files:
             monthly["date"] = monthly["date"].astype(str)
             fig_trend = px.line(monthly, x="date", y="amount", color="category", title="Monthly spending by category")
             st.plotly_chart(fig_trend, use_container_width=True)
-
-            with st.expander("View raw data"):
-                st.dataframe(df, use_container_width=True, hide_index=True)
 
 else:
     st.info("👆 Choose a source format and upload file(s). BofA Checking supports multiple CSVs (e.g. Jan, Feb, Mar) to merge.")
