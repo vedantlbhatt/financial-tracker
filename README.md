@@ -1,2 +1,2 @@
 # financial-tracker
-Requested tool from brother (business major)
+Requested tool from brother (business major 🤮)
