@@ -81,7 +81,12 @@ export const simplefinApi = {
     return data
   },
   sync: async () => {
-    const { data } = await api.post<{ message: string; new_transactions?: number }>('/simplefin/sync')
+    const { data } = await api.post<{
+      message: string
+      new_transactions?: number
+      api_calls?: number
+      quota?: { requests_used_today: number; requests_remaining_today: number; daily_request_limit: number }
+    }>('/simplefin/sync')
     return data
   },
 }

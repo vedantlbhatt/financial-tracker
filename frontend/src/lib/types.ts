@@ -90,6 +90,16 @@ export interface OverviewData {
   simplefin_status: string | null
   account_errors: unknown[] | null
   last_sync_at: string | null
+  rate_limit_notice?: string | null
+  requests_used_today?: number | null
+  requests_remaining_today?: number | null
+  daily_request_limit?: number | null
+}
+
+export interface QuotaInfo {
+  requests_used_today: number
+  requests_remaining_today: number
+  daily_request_limit: number
 }
 
 export interface SimplefinStatus {
@@ -97,6 +107,7 @@ export interface SimplefinStatus {
   status: string | null
   last_sync_at: string | null
   account_errors: unknown[] | null
+  quota: QuotaInfo | null
 }
 
 export interface AppSettings {

@@ -6,6 +6,7 @@ from app.models.transaction import Transaction
 from app.models.category_override import CategoryOverride
 from app.models.merchant_category_rule import MerchantCategoryRule
 from app.models.cash_flow_rollup import CashFlowRollup
+from app.models.simplefin_api_usage import SimplefinApiUsage
 
 __all__ = [
     "User",
@@ -16,4 +17,5 @@ __all__ = [
     "CategoryOverride",
     "MerchantCategoryRule",
     "CashFlowRollup",
+    "SimplefinApiUsage",
 ]

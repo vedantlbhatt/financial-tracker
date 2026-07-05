@@ -7,10 +7,9 @@ import { formatCurrency } from '@/lib/format'
 const COLORS = ['#4a90d9', '#48bb78', '#fc8181', '#f6ad55', '#9f7aea', '#38b2ac']
 
 export default function OverviewPage() {
-  const { data, isLoading, isFetching } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['overview'],
     queryFn: overviewApi.get,
-    refetchInterval: 30_000,
   })
 
   if (isLoading || !data) {
@@ -23,21 +22,32 @@ export default function OverviewPage() {
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
+      <header>
         <div>
           <h1 className="text-3xl m-0">Overview</h1>
           <p className="text-[var(--neu-text-secondary)] mt-1">Your financial snapshot for {monthLabel}</p>
+          {data.last_sync_at && (
+            <p className="text-xs text-[var(--neu-text-secondary)] mt-1 m-0">
+              Local data · last bank sync {format(parseISO(data.last_sync_at), 'MMM d, h:mm a')}
+              {data.requests_remaining_today != null &&
+                ` · ${data.requests_remaining_today}/${data.daily_request_limit ?? 24} SimpleFIN requests left today`}
+            </p>
+          )}
         </div>
-        {isFetching && (
-          <p className="text-sm text-[var(--neu-text-secondary)] m-0">Syncing latest transactions…</p>
-        )}
       </header>
+
+      {data.rate_limit_notice && (
+        <div className="neu-raised p-4 border-l-4 border-[var(--neu-warning)]">
+          <p className="font-medium m-0">SimpleFIN rate limit</p>
+          <p className="text-sm text-[var(--neu-text-secondary)] mt-1 m-0">{data.rate_limit_notice}</p>
+        </div>
+      )}
 
       {data.account_errors && data.account_errors.length > 0 && (
         <div className="neu-raised p-4 border-l-4 border-[var(--neu-warning)]">
-          <p className="font-medium m-0">SimpleFIN needs attention</p>
-          <p className="text-sm text-[var(--neu-text-secondary)] mt-1">
-            Re-link your bank on the SimpleFIN Bridge dashboard, then sync again.
+          <p className="font-medium m-0">Bank connection needs attention</p>
+          <p className="text-sm text-[var(--neu-text-secondary)] mt-1 m-0">
+            Re-link your bank on the SimpleFIN Bridge dashboard, then sync again in Settings.
           </p>
         </div>
       )}

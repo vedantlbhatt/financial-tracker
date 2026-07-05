@@ -6,9 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import engine, Base, AsyncSessionLocal
+from app.models import SimplefinApiUsage  # noqa: F401 — register table for create_all
 from app.routers import simplefin, accounts, transactions, categories, cash_flow, overview, settings
-from app.services.category_service import seed_merchant_rules
-from app.services.local_setup import ensure_local_ready
+from app.services.category_service import seed_merchant_rules, recategorize_uncategorized
+from app.services.local_setup import ensure_local_ready, get_or_create_local_user
 from app.workers.sync_worker import start_scheduler, stop_scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,10 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     async with AsyncSessionLocal() as db:
         await seed_merchant_rules(db)
+        user = await get_or_create_local_user(db)
+        recategorized = await recategorize_uncategorized(db, str(user.id))
+        if recategorized:
+            logger.info("Recategorized %s transactions on startup", recategorized)
         await ensure_local_ready(db)
         await db.commit()
     start_scheduler()

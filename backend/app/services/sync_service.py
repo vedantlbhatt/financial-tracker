@@ -17,7 +17,9 @@ from app.config import get_settings
 from app.models.account import Account
 from app.models.simplefin_connection import SimplefinConnection
 from app.models.transaction import Transaction
-from app.services import category_service, simplefin_service
+from app.services import category_service, simplefin_service, quota_service
+from app.services.quota_service import QuotaExceededError
+from app.services.simplefin_errors import filter_connection_errors
 from app.services.crypto_service import decrypt_secret
 from app.services.rollup_service import recompute_rollups_for_user
 from app.services.simplefin_service import posted_to_date, infer_account_type
@@ -33,6 +35,7 @@ async def _fetch_simplefin_data(
     *,
     full_backfill: bool,
     last_sync_at: datetime | None,
+    max_chunks: int | None = None,
 ) -> tuple[dict, int]:
     """
     Fetch account + transaction data from SimpleFIN.
@@ -48,7 +51,7 @@ async def _fetch_simplefin_data(
 
     # Initial / full backfill: 89-day chunks (Bridge max is 90 days per request)
     chunk_days = settings.simplefin_chunk_days
-    max_chunks = settings.simplefin_max_backfill_chunks
+    max_chunks = max_chunks or settings.simplefin_max_backfill_chunks
     accounts_map: dict[str, dict] = {}
     all_errors: list = []
     api_calls = 0
@@ -210,14 +213,29 @@ async def run_sync(
     access_url = decrypt_secret(connection.access_url_encrypted)
     needs_backfill = full_sync or not connection.last_sync_at
 
+    if needs_backfill:
+        needed_calls = min(
+            settings.simplefin_max_backfill_chunks,
+            await quota_service.remaining(db, connection.id),
+        )
+        if needed_calls <= 0:
+            used = await quota_service.get_usage_today(db, connection.id)
+            raise QuotaExceededError(used, settings.simplefin_daily_request_limit)
+    else:
+        needed_calls = 1
+        await quota_service.assert_can_sync(db, connection.id, needed=1)
+
     data, api_calls = await _fetch_simplefin_data(
         access_url,
         full_backfill=needs_backfill,
         last_sync_at=connection.last_sync_at,
+        max_chunks=needed_calls if needs_backfill else None,
     )
+    await quota_service.record_requests(db, connection.id, api_calls)
     user_id = str(connection.user_id)
 
-    account_errors = data.get("errors") or data.get("errlist") or []
+    raw_errors = data.get("errors") or data.get("errlist") or []
+    account_errors = filter_connection_errors(raw_errors)
     connection.account_errors = account_errors if account_errors else None
 
     new_count = 0
@@ -264,6 +282,7 @@ async def run_sync(
         "account_errors": account_errors,
         "api_calls": api_calls,
         "backfill_chunks": api_calls if needs_backfill else 1,
+        **(await quota_service.quota_snapshot(db, connection.id)),
     }
 
 

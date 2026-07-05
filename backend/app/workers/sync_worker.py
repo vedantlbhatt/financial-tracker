@@ -9,6 +9,7 @@ from app.database import AsyncSessionLocal
 from app.models.simplefin_connection import SimplefinConnection
 from app.models.user_settings import UserSettings
 from app.services import sync_service
+from app.services.quota_service import QuotaExceededError
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -32,11 +33,17 @@ async def _sync_all_connections() -> None:
                     window = user_settings.transfer_window_days
                 summary = await sync_service.run_sync(db, conn, window_days=window)
                 logger.info(f"Cron sync user {conn.user_id}: {summary}")
+            except QuotaExceededError as e:
+                logger.warning(f"Cron sync skipped for user {conn.user_id}: {e}")
             except Exception as e:
                 logger.error(f"Cron sync failed for user {conn.user_id}: {e}")
 
 
 def start_scheduler() -> None:
+    if not settings.auto_sync_enabled:
+        logger.info("Background SimpleFIN sync disabled — app reads from local DB; sync manually in Settings")
+        return
+
     interval_hours = max(1, settings.sync_interval_hours)
     scheduler.add_job(
         _sync_all_connections,

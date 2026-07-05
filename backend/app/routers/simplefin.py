@@ -9,11 +9,19 @@ from app.middleware.auth_middleware import get_local_user
 from app.models.user import User
 from app.models.simplefin_connection import SimplefinConnection
 from app.models.user_settings import UserSettings
-from app.services import sync_service
+from app.services import sync_service, quota_service
+from app.services.simplefin_errors import filter_connection_errors, has_rate_limit_error
+from app.services.quota_service import QuotaExceededError
 from app.services.simplefin_service import SimplefinError
 
 router = APIRouter(prefix="/simplefin", tags=["simplefin"])
 settings = get_settings()
+
+
+class QuotaInfo(BaseModel):
+    requests_used_today: int
+    requests_remaining_today: int
+    daily_request_limit: int
 
 
 class ConnectionStatus(BaseModel):
@@ -21,6 +29,7 @@ class ConnectionStatus(BaseModel):
     status: str | None
     last_sync_at: str | None
     account_errors: list | None
+    quota: QuotaInfo | None = None
 
 
 class SetupRequest(BaseModel):
@@ -31,6 +40,8 @@ class SetupRequest(BaseModel):
 class SyncResponse(BaseModel):
     message: str
     new_transactions: int | None = None
+    api_calls: int | None = None
+    quota: QuotaInfo | None = None
 
 
 async def _ensure_settings(db: AsyncSession, user: User) -> UserSettings:
@@ -42,6 +53,27 @@ async def _ensure_settings(db: AsyncSession, user: User) -> UserSettings:
     return s
 
 
+async def _status_for_connection(db: AsyncSession, conn: SimplefinConnection | None) -> ConnectionStatus:
+    if not conn:
+        return ConnectionStatus(connected=False, status=None, last_sync_at=None, account_errors=None)
+
+    stored_errors = conn.account_errors
+    connection_errors = filter_connection_errors(stored_errors)
+    if has_rate_limit_error(stored_errors) and not connection_errors and conn.status == "needs_attention":
+        conn.account_errors = None
+        conn.status = "active"
+        await db.flush()
+
+    quota = await quota_service.quota_snapshot(db, conn.id)
+    return ConnectionStatus(
+        connected=True,
+        status=conn.status,
+        last_sync_at=conn.last_sync_at.isoformat() if conn.last_sync_at else None,
+        account_errors=connection_errors if connection_errors else None,
+        quota=QuotaInfo(**quota),
+    )
+
+
 @router.get("/status", response_model=ConnectionStatus)
 async def connection_status(
     current_user: User = Depends(get_local_user),
@@ -51,14 +83,7 @@ async def connection_status(
         select(SimplefinConnection).where(SimplefinConnection.user_id == current_user.id)
     )
     conn = result.scalar_one_or_none()
-    if not conn:
-        return ConnectionStatus(connected=False, status=None, last_sync_at=None, account_errors=None)
-    return ConnectionStatus(
-        connected=True,
-        status=conn.status,
-        last_sync_at=conn.last_sync_at.isoformat() if conn.last_sync_at else None,
-        account_errors=conn.account_errors,
-    )
+    return await _status_for_connection(db, conn)
 
 
 @router.post("/setup", response_model=ConnectionStatus)
@@ -94,18 +119,16 @@ async def setup_simplefin(
             )
             c = result.scalar_one_or_none()
             if c:
-                await sync_service.run_sync(
-                    session, c, window_days=user_settings.transfer_window_days, full_sync=True
-                )
+                try:
+                    await sync_service.run_sync(
+                        session, c, window_days=user_settings.transfer_window_days, full_sync=True
+                    )
+                except QuotaExceededError:
+                    pass
 
     background_tasks.add_task(_initial_sync)
 
-    return ConnectionStatus(
-        connected=True,
-        status=conn.status,
-        last_sync_at=None,
-        account_errors=None,
-    )
+    return await _status_for_connection(db, conn)
 
 
 @router.post("/sync", response_model=SyncResponse)
@@ -126,10 +149,22 @@ async def trigger_sync(
 
     try:
         summary = await sync_service.run_sync(db, conn, window_days=window)
+    except QuotaExceededError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=str(e),
+        ) from e
     except SimplefinError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
 
+    quota = QuotaInfo(
+        requests_used_today=summary["requests_used_today"],
+        requests_remaining_today=summary["requests_remaining_today"],
+        daily_request_limit=summary["daily_request_limit"],
+    )
     return SyncResponse(
         message="Sync complete",
         new_transactions=summary.get("new_transactions"),
+        api_calls=summary.get("api_calls"),
+        quota=quota,
     )

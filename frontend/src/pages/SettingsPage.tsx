@@ -25,9 +25,21 @@ export default function SettingsPage() {
     mutationFn: simplefinApi.sync,
     onSuccess: (res) => {
       qc.invalidateQueries()
-      toast.success(`Sync complete${res.new_transactions != null ? ` (+${res.new_transactions} new)` : ''}`)
+      const quota = res.quota
+        ? ` · ${res.quota.requests_remaining_today} API requests left today`
+        : ''
+      toast.success(
+        `Sync complete${res.new_transactions != null ? ` (+${res.new_transactions} new)` : ''}${quota}`,
+      )
     },
-    onError: () => toast.error('Sync failed'),
+    onError: (err: { response?: { status?: number; data?: { detail?: string } } }) => {
+      const detail = err.response?.data?.detail
+      if (err.response?.status === 429) {
+        toast.error(detail || 'Daily SimpleFIN limit reached (24/day)')
+      } else {
+        toast.error(detail || 'Sync failed')
+      }
+    },
   })
 
   const setupSimplefin = useMutation({
@@ -61,17 +73,24 @@ export default function SettingsPage() {
         <h2 className="text-lg m-0">SimpleFIN connection</h2>
         <div className="neu-inset-sm p-4 text-sm text-[var(--neu-text-secondary)] space-y-2">
           <p className="m-0">
-            SimpleFIN Bridge only returns <strong>90 days of transactions per API call</strong>.
-            Initial sync walks backward in chunks; ongoing syncs pull recent changes only.
-            History beyond what BofA exposes (~90 days right now) won&apos;t appear.
+            <strong>All pages read from your local Postgres database.</strong> SimpleFIN is only called when you
+            press Sync — the free Bridge tier allows <strong>24 API requests per day</strong>.
           </p>
           <p className="m-0">
-            If the app shows connected below, you&apos;re done — no need to copy anything to <code className="text-xs">.env</code>.
+            Each incremental sync uses <strong>1 request</strong>. A full history backfill uses up to 8 requests
+            (89-day chunks). Use Sync sparingly.
           </p>
         </div>
         <p className="text-sm text-[var(--neu-text-secondary)] m-0">
           Status: {simplefinStatus?.connected ? simplefinStatus.status : 'Not connected'}
           {simplefinStatus?.last_sync_at && ` · Last sync ${new Date(simplefinStatus.last_sync_at).toLocaleString()}`}
+          {simplefinStatus?.quota && (
+            <>
+              {' '}
+              · API today: {simplefinStatus.quota.requests_used_today}/{simplefinStatus.quota.daily_request_limit}{' '}
+              used ({simplefinStatus.quota.requests_remaining_today} left)
+            </>
+          )}
         </p>
 
         {!simplefinStatus?.connected && (
@@ -81,8 +100,13 @@ export default function SettingsPage() {
         )}
 
         <div className="flex flex-wrap gap-3">
-          <button type="button" className="neu-btn px-4 py-2" onClick={() => syncNow.mutate()} disabled={!simplefinStatus?.connected}>
-            Sync now
+          <button
+            type="button"
+            className="neu-btn px-4 py-2"
+            onClick={() => syncNow.mutate()}
+            disabled={!simplefinStatus?.connected || simplefinStatus?.quota?.requests_remaining_today === 0}
+          >
+            Sync now (1 API request)
           </button>
         </div>
 

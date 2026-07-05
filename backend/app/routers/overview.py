@@ -1,12 +1,12 @@
 from datetime import date
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import get_db, AsyncSessionLocal
+from app.database import get_db
 from app.middleware.auth_middleware import get_local_user
 from app.models.user import User
 from app.models.account import Account
@@ -14,7 +14,8 @@ from app.models.transaction import Transaction
 from app.models.simplefin_connection import SimplefinConnection
 from app.models.cash_flow_rollup import CashFlowRollup
 from app.services.category_service import CATEGORIES
-from app.services import sync_service
+from app.services import quota_service
+from app.services.simplefin_errors import filter_connection_errors, has_rate_limit_error
 
 router = APIRouter(prefix="/overview", tags=["overview"])
 settings = get_settings()
@@ -64,23 +65,10 @@ class OverviewResponse(BaseModel):
     simplefin_status: str | None
     account_errors: list | None
     last_sync_at: str | None
-
-
-async def _background_sync(user_id: str) -> None:
-    async with AsyncSessionLocal() as db:
-        conn = (
-            await db.execute(
-                select(SimplefinConnection).where(SimplefinConnection.user_id == user_id)
-            )
-        ).scalar_one_or_none()
-        if not conn:
-            return
-        try:
-            await sync_service.run_sync(
-                db, conn, window_days=settings.transfer_window_days, full_sync=False
-            )
-        except Exception:
-            pass
+    rate_limit_notice: str | None = None
+    requests_used_today: int | None = None
+    requests_remaining_today: int | None = None
+    daily_request_limit: int | None = None
 
 
 def _income_filter():
@@ -93,11 +81,9 @@ def _income_filter():
 
 @router.get("", response_model=OverviewResponse)
 async def get_overview(
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_local_user),
     db: AsyncSession = Depends(get_db),
 ):
-    background_tasks.add_task(_background_sync, str(current_user.id))
 
     conn_result = await db.execute(
         select(SimplefinConnection).where(SimplefinConnection.user_id == current_user.id)
@@ -200,6 +186,29 @@ async def get_overview(
             for tx in income_result.scalars()
         ]
 
+    quota = (
+        await quota_service.quota_snapshot(db, conn.id)
+        if conn
+        else {
+            "requests_used_today": None,
+            "requests_remaining_today": None,
+            "daily_request_limit": settings.simplefin_daily_request_limit,
+        }
+    )
+
+    stored_errors = conn.account_errors if conn else None
+    connection_errors = filter_connection_errors(stored_errors)
+    rate_limit_notice = None
+    if conn and has_rate_limit_error(stored_errors) and not connection_errors:
+        rate_limit_notice = (
+            "SimpleFIN daily API limit was hit earlier. Your bank is still connected — "
+            "the app is showing saved local data. Try Sync again tomorrow."
+        )
+        if conn.status == "needs_attention":
+            conn.account_errors = None
+            conn.status = "active"
+            await db.flush()
+
     return OverviewResponse(
         net_worth=round(net_worth, 2),
         month_inflow=round(month_inflow, 2),
@@ -223,8 +232,12 @@ async def get_overview(
         ],
         top_categories=top_categories,
         simplefin_status=conn.status if conn else None,
-        account_errors=conn.account_errors if conn else None,
+        account_errors=connection_errors if connection_errors else None,
         last_sync_at=conn.last_sync_at.isoformat() if conn and conn.last_sync_at else None,
+        rate_limit_notice=rate_limit_notice,
+        requests_used_today=quota.get("requests_used_today"),
+        requests_remaining_today=quota.get("requests_remaining_today"),
+        daily_request_limit=quota.get("daily_request_limit"),
     )
 
 

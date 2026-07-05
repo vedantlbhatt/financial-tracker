@@ -109,6 +109,7 @@ async def reconnect_simplefin(
     db: AsyncSession = Depends(get_db),
 ):
     from app.services.simplefin_service import SimplefinError
+    from app.services.quota_service import QuotaExceededError
 
     token = body.setup_token or settings.simplefin_token
     access_url = body.access_url or settings.simplefin_access_url
@@ -124,6 +125,8 @@ async def reconnect_simplefin(
         )
         window = window_result.scalar_one_or_none() or settings.transfer_window_days
         await sync_service.run_sync(db, conn, window_days=window, full_sync=True)
+    except QuotaExceededError as e:
+        raise HTTPException(status_code=429, detail=str(e)) from e
     except SimplefinError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

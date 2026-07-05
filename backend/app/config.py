@@ -27,9 +27,11 @@ class Settings(BaseSettings):
     # Encryption
     fernet_key: str = "dev_fernet_key_replace_me_in_production="
 
-    # App
+    # App — all pages read from local Postgres; SimpleFIN is manual sync only
     backend_cors_origins: str = "http://localhost:5173"
-    sync_interval_hours: int = 2
+    auto_sync_enabled: bool = False
+    sync_interval_hours: int = 24
+    simplefin_daily_request_limit: int = 24
     transfer_window_days: int = 2
     simplefin_chunk_days: int = 89
     simplefin_max_backfill_chunks: int = 8

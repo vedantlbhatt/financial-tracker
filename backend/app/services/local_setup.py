@@ -45,7 +45,7 @@ async def _cleanup_orphan_users(db: AsyncSession, canonical_user: User) -> None:
 
 
 async def ensure_local_ready(db: AsyncSession) -> None:
-    """On startup: ensure local user, SimpleFIN connection, and initial sync."""
+    """On startup: ensure local user and SimpleFIN connection — no automatic bank sync."""
     user = await get_or_create_local_user(db)
     await _cleanup_orphan_users(db, user)
 
@@ -55,24 +55,12 @@ async def ensure_local_ready(db: AsyncSession) -> None:
 
     if not conn and (settings.simplefin_access_url or settings.simplefin_token):
         try:
-            conn = await sync_service.setup_connection(
+            await sync_service.setup_connection(
                 db,
                 str(user.id),
                 setup_token=settings.simplefin_token,
                 access_url=settings.simplefin_access_url,
             )
-            await db.flush()
-            await sync_service.run_sync(
-                db, conn, window_days=settings.transfer_window_days, full_sync=True
-            )
-            logger.info("Local SimpleFIN setup + sync complete")
+            logger.info("Local SimpleFIN connection saved — sync manually in Settings to pull bank data")
         except Exception as e:
             logger.warning(f"Local SimpleFIN setup failed: {e}")
-    elif conn and not conn.last_sync_at:
-        try:
-            await sync_service.run_sync(
-                db, conn, window_days=settings.transfer_window_days, full_sync=True
-            )
-            logger.info("Local SimpleFIN catch-up sync complete")
-        except Exception as e:
-            logger.warning(f"Local SimpleFIN sync failed: {e}")

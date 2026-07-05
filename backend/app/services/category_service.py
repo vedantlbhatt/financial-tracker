@@ -91,6 +91,54 @@ SEED_RULES: list[tuple[str, str, bool]] = [
     ("OVERDRAFT", "Bank Fees", False),
     ("SERVICE FEE", "Bank Fees", False),
     ("ATM FEE", "Bank Fees", False),
+    # Travel
+    ("CHEWUCH", "Travel", False),
+    ("HOTEL", "Travel", False),
+    (" INN ", "Travel", False),
+    ("AIRBNB", "Travel", False),
+    # Shopping
+    ("NIKE", "Shopping", False),
+    ("H&M", "Shopping", False),
+    ("FABLETICS", "Shopping", False),
+    ("STOCKX", "Shopping", False),
+    # Food
+    ("CHILI", "Food & Drink", False),
+    ("THAI CUISINE", "Food & Drink", False),
+    ("SPARROW", "Food & Drink", False),
+    ("BOLLYWOOD", "Food & Drink", False),
+    ("7-ELEVEN", "Food & Drink", False),
+    ("SALT AND STRAW", "Food & Drink", False),
+    ("GINGER & SCALLION", "Food & Drink", False),
+    ("FUJI BAKERY", "Food & Drink", False),
+    ("TRINITY MARKET", "Food & Drink", False),
+    # Entertainment
+    ("GOOGLE PLAY", "Entertainment", False),
+    ("GREAT WESTERN", "Entertainment", False),
+    ("TIKTOK SHOP", "Shopping", False),
+    # Education / income
+    ("GEORGIA INSTITUT", "Income", False),
+    ("CASHREWARD", "Income", False),
+    ("INTEREST EARNED", "Income", False),
+    # Services
+    ("RAILWAY", "Services", False),
+    ("ORCA", "Transport", False),
+    ("EXPO.DEV", "Services", False),
+    ("WSFERRIES", "Transport", False),
+    ("TST*", "Food & Drink", False),
+    ("TACO BELL", "Food & Drink", False),
+    ("PANDA EXPRESS", "Food & Drink", False),
+    ("CHICK-FIL", "Food & Drink", False),
+    ("RAISING CANES", "Food & Drink", False),
+    ("BUFFALO WILD", "Food & Drink", False),
+    ("CAVA", "Food & Drink", False),
+    ("PUBLIX", "Food & Drink", False),
+    ("GYRO", "Food & Drink", False),
+    ("TACOS", "Food & Drink", False),
+    ("HOT CHICKEN", "Food & Drink", False),
+    ("SANDO", "Food & Drink", False),
+    ("SKALKA", "Food & Drink", False),
+    ("MOGE TEE", "Food & Drink", False),
+    ("ALPHA KAPPA", "Education", False),
 ]
 
 
@@ -120,6 +168,31 @@ def _match_text(text: str, pattern: str, is_regex: bool) -> bool:
     return pattern.upper() in text.upper()
 
 
+def _smart_category(description: str, payee: str | None) -> str | None:
+    """High-confidence patterns before generic merchant rules."""
+    text = f"{description} {payee or ''}".upper()
+
+    income_markers = (
+        "DIR DEP",
+        "DIRECT DEP",
+        "PAYROLL",
+        "EXP REIMB",
+        "EDI PYMNTS",
+        "CASHREWARD",
+        "INTEREST EARNED",
+        "INTEREST PAID",
+        "DIVIDEND",
+    )
+    if any(m in text for m in income_markers):
+        return "Income"
+
+    # Expedia payroll uses DIR DEP; travel bookings are card charges
+    if "EXPEDIA" in text and not any(m in text for m in ("DIR DEP", "DIRECT DEP", "EXP REIMB")):
+        return "Travel"
+
+    return None
+
+
 async def categorize_transaction_text(
     db: AsyncSession,
     user_id: str,
@@ -127,6 +200,10 @@ async def categorize_transaction_text(
     payee: str | None,
 ) -> str:
     text = f"{description} {payee or ''}".strip()
+
+    smart = _smart_category(description, payee)
+    if smart:
+        return smart
 
     if payee:
         override_result = await db.execute(
@@ -177,6 +254,38 @@ async def apply_categories_to_new_transactions(
             db, user_id, tx.description, tx.payee
         )
         updated += 1
+    await db.flush()
+    return updated
+
+
+async def recategorize_uncategorized(db: AsyncSession, user_id: str) -> int:
+    """Re-run rules on all non-transfer txs still marked Uncategorized."""
+    account_ids_result = await db.execute(
+        select(Account.id)
+        .join(SimplefinConnection, SimplefinConnection.id == Account.simplefin_connection_id)
+        .where(SimplefinConnection.user_id == user_id)
+    )
+    account_ids = [row.id for row in account_ids_result]
+    if not account_ids:
+        return 0
+
+    result = await db.execute(
+        select(Transaction).where(
+            Transaction.account_id.in_(account_ids),
+            Transaction.user_category.is_(None),
+            Transaction.is_transfer == False,  # noqa: E712
+            or_(
+                Transaction.auto_category.is_(None),
+                Transaction.auto_category == "Uncategorized",
+            ),
+        )
+    )
+    updated = 0
+    for tx in result.scalars():
+        new_cat = await categorize_transaction_text(db, user_id, tx.description, tx.payee)
+        if new_cat != tx.auto_category:
+            tx.auto_category = new_cat
+            updated += 1
     await db.flush()
     return updated
 
